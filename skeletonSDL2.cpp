@@ -5,7 +5,8 @@
 #include "TestModel.h"
 #include <glm/gtx/string_cast.hpp>
 #include <glm/gtc/matrix_access.hpp>
-
+#include<cstdlib>
+#include "math.h"
 using namespace std;
 using glm::vec3;
 using glm::cross;
@@ -35,7 +36,7 @@ glm::mat3 R(1, 0, 0,
 float yaw = 0;
 
 // Light
-vec3 lightPos(0, -0.5, -0.7);
+vec3 lightPos(0, 0.9, -0.8);
 vec3 lightColor = 14.f * vec3(1, 1, 1);
 vec3 indirectLight = 0.5f * vec3(1, 1, 1);
 
@@ -43,7 +44,9 @@ vec3 black(0, 0, 0);
 
 // PHOTON MAPPING CONSTS
 int numberOfPhotons = 100000;
-
+int numberOfDebugPhotons = 1000;
+bool dynamic = true;
+bool debug = false;
 // ----------------------------------------------------------------------------
 // STRUCTS
 
@@ -58,6 +61,7 @@ struct Photon {
 	//float phi, theta;
 	//short flag;
 	bool hit = false;
+	vector<vec3> path;
 };
 
 // ----------------------------------------------------------------------------
@@ -78,6 +82,7 @@ bool ClosestIntersection(
 vec3 DirectLight(const Intersection& i);
 
 void PhotonPass(vector<Photon>& photonMap);
+void DebugPhotonPass(vector<Photon>& photonMap);
 // ----------------------------------------------------------------------------
 // MAIN FUNCTION
 
@@ -85,7 +90,6 @@ int main(int argc, char* argv[])
 {
 	sdlAux = new SDL2Aux(SCREEN_WIDTH, SCREEN_HEIGHT);
 	t = SDL_GetTicks();	// Set start value for timer.
-
 	// Load scene values
 	LoadTestModel(triangles);
 	/*for (int i = 0; i < triangles.size(); i++) {
@@ -94,9 +98,15 @@ int main(int argc, char* argv[])
 
 	vector<Photon> photonMap(numberOfPhotons);
 	PhotonPass(photonMap);
+	if (debug) {
+		DebugPhotonPass(photonMap);
+	}
 
 	while (!sdlAux->quitEvent())
 	{
+		if (dynamic) {
+			PhotonPass(photonMap);
+		}
 		Draw(photonMap);
 		Update();
 	}
@@ -178,7 +188,7 @@ void Update(void)
 	int t2 = SDL_GetTicks();
 	float dt = float(t2 - t);
 	t = t2;
-	//cout << "Render time: " << dt << " ms." << endl;
+	cout << "Render time: " << dt << " ms." << endl;
 
 	// Camera control
 	const Uint8* keystate = SDL_GetKeyboardState(NULL);
@@ -203,24 +213,24 @@ void Update(void)
 		Rotate();
 	}
 	// Light control
-	if (keystate[SDL_SCANCODE_W]) {
+	if (keystate[SDL_SCANCODE_UP]) {
 		lightPos.z += dt * cameraV / 1000;
 	}
-	if (keystate[SDL_SCANCODE_S]) {
+	if (keystate[SDL_SCANCODE_DOWN]) {
 		lightPos.z -= dt * cameraV / 1000;
 	}
-	if (keystate[SDL_SCANCODE_A]) {
+	if (keystate[SDL_SCANCODE_LEFT]) {
 		lightPos.x -= dt * cameraV / 1000;
 	}
-	if (keystate[SDL_SCANCODE_D]) {
+	if (keystate[SDL_SCANCODE_RIGHT]) {
 		lightPos.x += dt * cameraV / 1000;
 	}
-	//if (keystate[SDL_SCANCODE_Q]) {
-	//	lightPos.y += dt * cameraV / 1000;
-	//}
-	//if (keystate[SDL_SCANCODE_E]) {
-	//	lightPos.y -= dt * cameraV / 1000;
-	//}
+	if (keystate[SDL_SCANCODE_O]) {
+		lightPos.y += dt * cameraV / 1000;
+	}
+	if (keystate[SDL_SCANCODE_L]) {
+		lightPos.y -= dt * cameraV / 1000;
+	}
 
 }
 
@@ -228,15 +238,6 @@ void Draw(vector<Photon> photonMap)
 {
 	sdlAux->clearPixels();
 
-	for (int i = 0; i < photonMap.size(); i++) {
-		Photon photon = photonMap[i];
-		if (photon.hit) {
-			vec3 tPos = (photon.position - cameraPos) * R;
-			int x = focalLength * tPos.x / tPos.z + SCREEN_WIDTH / 2.0;
-			int y = focalLength * tPos.y / tPos.z + SCREEN_HEIGHT / 2.0;
-			sdlAux->putPixel(x, y, vec3(1.0, 1.0, 1.0));
-		}
-	}
 
 	/*for (int y = 0; y < SCREEN_HEIGHT; ++y)
 	{
@@ -257,6 +258,23 @@ void Draw(vector<Photon> photonMap)
 			}
 		}
 	}*/
+
+	for (int i = 0; i < photonMap.size(); i++) {
+		Photon photon = photonMap[i];
+		
+		if (photon.hit) {
+			vec3 tPos = (photon.position - cameraPos) * R;
+			int x = focalLength * tPos.x / tPos.z + SCREEN_WIDTH / 2.0;
+			int y = focalLength * tPos.y / tPos.z + SCREEN_HEIGHT / 2.0;
+			if(debug && i < numberOfDebugPhotons) {
+				sdlAux->putPixel(x, y, vec3(1.0, 0.0, 0.0));
+			}
+			else {
+				sdlAux->putPixel(x, y, vec3(1.0, 1.0, 1.0));
+			}
+		}
+	}
+
 	sdlAux->render();
 }
 
@@ -265,19 +283,81 @@ void Draw(vector<Photon> photonMap)
 
 
 void PhotonPass(vector<Photon>& photonMap) {
+	int t1 = SDL_GetTicks();
+	
+	std::srand(2);
 	for (int i = 0; i < photonMap.size(); i++) {
 		photonMap[i].power = vec3(10, 10, 10) / (float) photonMap.size();
+		photonMap[i].path.clear();
+		photonMap[i].path.push_back(lightPos);
 		Intersection closestIntersection;
 		bool reflected = true;
 		vec3 origin = lightPos;
 		vec3 direction((2 * (float)rand() / RAND_MAX) - 1, (2 * (float)rand() / RAND_MAX) - 1, (2 * (float)rand() / RAND_MAX) - 1);
+		int reflectionTriangleIndex = -1;
+		while (reflected) {
+			photonMap[i].hit = ClosestIntersection(origin, direction, triangles, closestIntersection, reflectionTriangleIndex);
+			if (photonMap[i].hit) {
+				photonMap[i].path.push_back(closestIntersection.position);
+				reflectionTriangleIndex = closestIntersection.triangleIndex;
+				Triangle triangle = triangles[reflectionTriangleIndex];
+				glm::vec3 surfaceMaterial = triangle.photonProbabilities;
+				float epsilon = (float)rand() / RAND_MAX;
+				if (epsilon > surfaceMaterial.x + surfaceMaterial.y + surfaceMaterial.z) {
+					reflected = false;
+				}
+				else if (epsilon > surfaceMaterial.x + surfaceMaterial.y){
+					origin = closestIntersection.position;
+					vec3 normal = triangle.normal;
+					float n1 = 1.0;
+					float n2 = triangle.refIndex;
+					float r = n1 / n2;
+					float c = glm::dot(-normal, direction);
+					direction = r * direction + normal * (float)(r * c - sqrt(1 - pow(r, 2) * (1 - pow(c, 2))));
+					ClosestIntersection(origin, direction, triangles, closestIntersection, reflectionTriangleIndex);
+					origin = closestIntersection.position;
+					n1 = triangle.refIndex;
+					n2 = 1.0;
+					c = glm::dot(-normal, direction);
+					direction = r * direction + normal * (float)(r * c - sqrt(1 - pow(r, 2) * (1 - pow(c, 2))));
+				}
+				else {
+					origin = closestIntersection.position;
+					vec3 normal = triangle.normal;
+					vec3 projection = (direction * normal) / (float)pow(glm::length(normal), 2.0) * normal;
+					if ((direction - (2.0f * projection)).z < 0) {
+						//cout << "Direction: " << glm::to_string(direction) << " Normal: " << glm::to_string(normal) << " Projection: " << glm::to_string(projection) << " New direction: " << glm::to_string(direction - (2.0f * projection)) << "\n";
+					}
+					direction -= 2.0f * projection;
+				}
+			}
+			else {
+				reflected = false;
+			}
+		}
+		photonMap[i].position = closestIntersection.position;
+	}
+	int t2 = SDL_GetTicks();
+	float dt = float(t2 - t1);
+	//cout << "Photon pass time: " << dt << " ms." << endl;
+}
+
+void DebugPhotonPass(vector<Photon>& photonMap) {
+	int t1 = SDL_GetTicks();
+
+	for (int i = 0; i < numberOfDebugPhotons; i++) {
+		photonMap[i].power = vec3(10, 10, 10) / (float)photonMap.size();
+		Intersection closestIntersection;
+		bool reflected = true;
+		vec3 origin = lightPos;
+		vec3 direction(cos(2 * M_PI * i / (numberOfDebugPhotons / 10)), sin(2 * M_PI * i / (numberOfDebugPhotons / 10)), -10);
 		while (reflected) {
 			photonMap[i].hit = ClosestIntersection(origin, direction, triangles, closestIntersection, -1);
 			if (photonMap[i].hit) {
 				Triangle triangle = triangles[closestIntersection.triangleIndex];
-				glm::vec2 surfaceMaterial = triangle.photonProbabilities;
+				glm::vec3 surfaceMaterial = triangle.photonProbabilities;
 				float epsilon = (float)rand() / RAND_MAX;
-				if (epsilon > surfaceMaterial.x + surfaceMaterial.y) {
+				if (epsilon > surfaceMaterial.x + surfaceMaterial.y + surfaceMaterial.z) {
 					reflected = false;
 				}
 				else {
@@ -291,8 +371,11 @@ void PhotonPass(vector<Photon>& photonMap) {
 				reflected = false;
 			}
 		}
-		
+
 		photonMap[i].position = closestIntersection.position;
 	}
+	int t2 = SDL_GetTicks();
+	float dt = float(t2 - t1);
+	cout << "Debug photon pass time: " << dt << " ms." << endl;
 }
 
